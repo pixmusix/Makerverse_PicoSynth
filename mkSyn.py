@@ -1,4 +1,5 @@
 from machine import Pin, ADC
+import rp2
 from time import sleep, ticks_ms
 from math import sin, cos, floor, pi, pow
 import random
@@ -206,20 +207,31 @@ class GaussNoise(Oscilator):
 
 class DAC:
 
+    pio_config = {
+        "out_init": [rp2.PIO.OUT_HIGH] * 10, 
+        "out_shiftdir": rp2.PIO.SHIFT_RIGHT,
+        "autopull": True,
+        "pull_thresh": 10
+    }
+    
     def __init__(self, pins : List[int]):
         self.pins : Tuple[Pins] = tuple([Pin(p, Pin.OUT) for p in pins])
+        self.sm = rp2.StateMachine(0, self.update_DAC, freq=16384, out_base=Pin(6))
+        self.sm.active(1)
+
+    @rp2.asm_pio(**pio_config)
+    def update_DAC():
+        out(pins, 10) # punch x register onto all pins instantaneously
 
     def punch(self, output : int):
         output = int(output) # no daughter of mine will date a filthy non-int
         output &= int(0x3FF) # chop to LSB 10bits
-        for pin in self.pins:
-            pin.value(output & 0b1)
-            output = output >> 1
+        self.sm.put(output)
 
     def punch_signal(self, sig : Signal):
         if not isinstance(sig, Signal):
             raise NotImplementedError
-        output = (sig.val + 1) / 2 * (2**10)
+        output = (sig.val + 1) / 2 * (2**10 - 1)
         self.punch(output)
 
     def __str__(self):
@@ -250,7 +262,7 @@ class VCC_Monitor:
         print(f"dac - {val}")
 
 # Monitor the r2Ladder Output
-vcc_mon = VCC_Monitor(28)
+# vcc_mon = VCC_Monitor(28)
 
 # Manip values with pots
 north_pot = Pot(27)
@@ -263,15 +275,12 @@ tp = Transport()
 dac = DAC(list(range(6, 16)))
 
 # oscilators
-cycle = SineWave(amplitude=0.01, frequency=0.01)
-sqr = SquareWave(amplitude=0.4, frequency=1)
-sqr2 = SquareWave(amplitude=0.4, frequency=0.3)
+cycle = SineWave(amplitude=1, frequency=2)
+saw = SawWave(amplitude=0.35, frequency=120)
+saw2 = SawWave(amplitude=0.1, frequency=480)
+sqr = SquareWave(amplitude=0.5, frequency=512)
 
 while 1:
-    sqr.freq_mod(cycle)
-    o = Oscilator(value = 0.5)
-    sig = Signal(sqr)
-    sig -= o
+    sig = Signal(cycle)
     dac.punch_signal(sig)
     tp.tick()
-    vcc_mon.read()
